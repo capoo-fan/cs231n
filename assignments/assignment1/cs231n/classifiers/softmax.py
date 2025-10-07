@@ -30,30 +30,35 @@ def softmax_loss_naive(W, X, y, reg):
     num_classes = W.shape[1]
     num_train = X.shape[0]
     for i in range(num_train):
-        scores = X[i].dot(W)
+        scores = X[i].dot(W) # 取得分数
 
         # compute the probabilities in numerically stable way
-        scores -= np.max(scores)
+        scores -= np.max(scores) # 防止 exp 数值过大
         p = np.exp(scores)
         p /= p.sum()  # normalize
         logp = np.log(p)
 
         loss -= logp[y[i]]  # negative log probability is the loss
-
-
+        dscores = p.copy()
+        dscores[y[i]] -= 1
+        for j in range(num_classes):
+            dW[:, j] += X[i] * dscores[j] # 对于同一个第j类,累加所有样本的贡献
+   
     # normalized hinge loss plus regularization
     loss = loss / num_train + reg * np.sum(W * W)
-
+    dW = dW / num_train + 2 * reg * W
     #############################################################################
-    # TODO:                                                                     #
-    # Compute the gradient of the loss function and store it dW.                #
+    # TODO:        
+                                                             #
+    # Compute the gradient of the loss function and store it dW.          
+    # 计算损失函数的梯度,将其存储为 dW
     # Rather that first computing the loss and then computing the derivative,   #
+    #  在计算损失的同时计算梯度
     # it may be simpler to compute the derivative at the same time that the     #
     # loss is being computed. As a result you may need to modify some of the    #
-    # code above to compute the gradient.                                       #
+    # code above to compute the gradient.                 
+    # 在计算损失的同时计算梯度
     #############################################################################
-
-
     return loss, dW
 
 
