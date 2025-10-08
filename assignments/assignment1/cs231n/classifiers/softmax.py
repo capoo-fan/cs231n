@@ -78,7 +78,13 @@ def softmax_loss_vectorized(W, X, y, reg):
     # Implement a vectorized version of the softmax loss, storing the           #
     # result in loss.                                                           #
     #############################################################################
-
+    score=X.dot(W)
+    score-=np.max(score,axis=1,keepdims=True) # axis=1表示 沿着行操作,keepdims=True 保持二维
+    p=np.exp(score)
+    p/=np.sum(p,axis=1,keepdims=True) # 归一化
+    logp=np.log(p)
+    loss=-np.sum(logp[np.arange(X.shape[0]),y]) # np.arange(X.shape[0]) 生成0~N-1的数组,用y索引出对应的值
+    loss=loss/X.shape[0]+reg*np.sum(W*W)
 
     #############################################################################
     # TODO:                                                                     #
@@ -89,6 +95,9 @@ def softmax_loss_vectorized(W, X, y, reg):
     # to reuse some of the intermediate values that you used to compute the     #
     # loss.                                                                     #
     #############################################################################
-
-
+    dW=np.zeros_like(W)
+    dscores=p.copy()
+    dscores[np.arange(X.shape[0]),y]-=1
+    dW=X.T.dot(dscores)
+    dW=dW/X.shape[0]+2*reg*W
     return loss, dW
