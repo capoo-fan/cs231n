@@ -49,7 +49,7 @@ class LinearClassifier(object):
 
         # Run stochastic gradient descent to optimize W
         loss_history = []
-        for it in range(num_iters):
+        for it in range(num_iters): #迭代num_iters次
             X_batch = None
             y_batch = None
 
@@ -64,9 +64,11 @@ class LinearClassifier(object):
             # Hint: Use np.random.choice to generate indices. Sampling with         #
             # replacement is faster than sampling without replacement.              #
             #########################################################################
-
-
+            num_train = X.shape[0]
+            indices = np.random.choice(num_train, batch_size, replace=True) #随机生成索引,replace=True表示有放回抽样
             # evaluate loss and gradient
+            X_batch = X[indices]
+            y_batch = y[indices]
             loss, grad = self.loss(X_batch, y_batch, reg)
             loss_history.append(loss)
 
@@ -75,7 +77,7 @@ class LinearClassifier(object):
             # TODO:                                                                 #
             # Update the weights using the gradient and the learning rate.          #
             #########################################################################
-
+            self.W -= learning_rate * grad
 
             if verbose and it % 100 == 0:
                 print("iteration %d / %d: loss %f" % (it, num_iters, loss))
@@ -101,7 +103,8 @@ class LinearClassifier(object):
         # TODO:                                                                   #
         # Implement this method. Store the predicted labels in y_pred.            #
         ###########################################################################
-
+        scores = X.dot(self.W)  # (N,C)
+        y_pred = np.argmax(scores, axis=1)  # (N,)
         return y_pred
 
     def loss(self, X_batch, y_batch, reg):
@@ -120,6 +123,7 @@ class LinearClassifier(object):
         - gradient with respect to self.W; an array of the same shape as W
         """
         pass
+        
 
     def save(self, fname):
       """Save model parameters."""
@@ -143,13 +147,13 @@ class LinearClassifier(object):
 
 class LinearSVM(LinearClassifier):
     """ A subclass that uses the Multiclass SVM loss function """
-
     def loss(self, X_batch, y_batch, reg):
-        return svm_loss_vectorized(self.W, X_batch, y_batch, reg)
+        pass
+        #return svm_loss_vectorized(self.W, X_batch, y_batch, reg)
 
 
 class Softmax(LinearClassifier):
     """ A subclass that uses the Softmax + Cross-entropy loss function """
-
     def loss(self, X_batch, y_batch, reg):
         return softmax_loss_vectorized(self.W, X_batch, y_batch, reg)
+    
