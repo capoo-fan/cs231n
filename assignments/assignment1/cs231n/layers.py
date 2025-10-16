@@ -724,7 +724,18 @@ def softmax_loss(x, y):
     ###########################################################################
     # TODO: Copy over your solution from A1.
     ###########################################################################
+    score=x
+    score-=np.max(score,axis=1,keepdims=True) # axis=1表示 沿着行操作,keepdims=True 保持二维
+    p=np.exp(score)
+    p/=np.sum(p,axis=1,keepdims=True) # 归一化
+    logp=np.log(p)
+    loss=-np.sum(logp[np.arange(x.shape[0]),y]) # np.arange(X.shape[0]) 生成0~N-1的数组,用y索引出对应的值
+    loss=loss/x.shape[0]
 
+    dx=np.zeros_like(x)
+    dscores=p.copy()
+    dscores[np.arange(x.shape[0]),y]-=1
+    dx=dscores/x.shape[0]
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################

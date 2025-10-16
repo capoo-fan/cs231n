@@ -54,7 +54,10 @@ class TwoLayerNet(object):
         # and biases using the keys 'W1' and 'b1' and second layer                 #
         # weights and biases using the keys 'W2' and 'b2'.                         #
         ############################################################################
-
+        self.params['W1'] = np.random.randn(input_dim, hidden_dim) * weight_scale # self.params 让其他函数可以访问的变量
+        self.params['b1'] = np.zeros(hidden_dim)
+        self.params['W2'] = np.random.randn(hidden_dim, num_classes) * weight_scale
+        self.params['b2'] = np.zeros(num_classes)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -83,7 +86,12 @@ class TwoLayerNet(object):
         # TODO: Implement the forward pass for the two-layer net, computing the    #
         # class scores for X and storing them in the scores variable.              #
         ############################################################################
-
+        N = X.shape[0]
+        X = X.reshape(N, -1) # 展平
+        W1, b1 = self.params['W1'], self.params['b1']
+        W2, b2 = self.params['W2'], self.params['b2']
+        hidden_layer = np.maximum(0, X.dot(W1) + b1) # ReLU
+        scores = hidden_layer.dot(W2) + b2  #  第二层
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -98,12 +106,22 @@ class TwoLayerNet(object):
         # in the loss variable and gradients in the grads dictionary. Compute data #
         # loss using softmax, and make sure that grads[k] holds the gradients for  #
         # self.params[k]. Don't forget to add L2 regularization!                   #
-        #                                                                          #
+        #                                                                         #
         # NOTE: To ensure that your implementation matches ours and you pass the   #
         # automated tests, make sure that your L2 regularization includes a factor #
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
-
+        # 用 softmax_loss 计算 loss 和 dscores
+        loss, dscores = softmax_loss(scores, y)
+        # 加上正则化
+        loss += 0.5 * self.reg * (np.sum(W1 * W1) + np.sum(W2 * W2))
+        # 反向传播
+        dhidden = dscores.dot(W2.T) 
+        dhidden[hidden_layer <= 0] = 0 # ReLU 的梯度
+        grads['W2'] = hidden_layer.T.dot(dscores) + self.reg * W2
+        grads['b2'] = np.sum(dscores, axis=0)
+        grads['W1'] = X.T.dot(dhidden) + self.reg * W1
+        grads['b1'] = np.sum(dhidden, axis=0)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
