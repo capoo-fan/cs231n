@@ -126,7 +126,7 @@ def softmax_loss(x, y):
     return loss, dx
 
 
-def batchnorm_forward(x, gamma, beta, bn_param):
+def batchnorm_forward(x, gamma, beta, bn_param): # x是数据，gamma是缩放参数，beta是平移参数，bn_param是包含其他参数的字典
     """Forward pass for batch normalization.
 
     During training the sample mean and (uncorrected) sample variance are
@@ -153,11 +153,11 @@ def batchnorm_forward(x, gamma, beta, bn_param):
     - gamma: Scale parameter of shape (D,)
     - beta: Shift paremeter of shape (D,)
     - bn_param: Dictionary with the following keys:
-      - mode: 'train' or 'test'; required
-      - eps: Constant for numeric stability
-      - momentum: Constant for running mean / variance.
-      - running_mean: Array of shape (D,) giving running mean of features
-      - running_var Array of shape (D,) giving running variance of features
+      - mode: 'train' or 'test'; required 训练或者测试模式
+      - eps: Constant for numeric stability  数值稳定性的常数，防止方差为零
+      - momentum: Constant for running mean / variance.  用于运行均值/方差的动量常数
+      - running_mean: Array of shape (D,) giving running mean of features  特征的运行均值
+      - running_var Array of shape (D,) giving running variance of features  特征的运行方差
 
     Returns a tuple of:
     - out: of shape (N, D)
@@ -194,7 +194,14 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # Referencing the original paper (https://arxiv.org/abs/1502.03167)   #
         # might prove to be helpful.                                          #
         #######################################################################
-        pass
+        sample_mean = np.mean(x, axis=0)
+        sample_var = np.var(x, axis=0)
+        sample_std = np.sqrt(sample_var + eps)
+        x_normalized = (x - sample_mean) / sample_std
+        out = gamma * x_normalized + beta
+        running_mean = momentum * running_mean + (1 - momentum) * sample_mean
+        running_var = momentum * running_var + (1 - momentum) * sample_var
+        cache = (x, sample_mean, sample_var, sample_std, x_normalized, gamma, eps)
         #######################################################################
         #                           END OF YOUR CODE                          #
         #######################################################################
@@ -205,7 +212,8 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # then scale and shift the normalized data using gamma and beta.      #
         # Store the result in the out variable.                               #
         #######################################################################
-        pass
+        x_normalized = (x - running_mean) / np.sqrt(running_var + eps)
+        out = gamma * x_normalized + beta
         #######################################################################
         #                          END OF YOUR CODE                           #
         #######################################################################
