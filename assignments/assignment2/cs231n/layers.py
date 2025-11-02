@@ -250,7 +250,36 @@ def batchnorm_backward(dout, cache):
     # Referencing the original paper (https://arxiv.org/abs/1502.03167)       #
     # might prove to be helpful.                                              #
     ###########################################################################
-    # 
+    (x,sample_mean,sample_var,sample_std,x_normalized,gamma,eps) = cache
+    N,D = x.shape
+    dbeta = np.sum(dout, axis=0) 
+    dgamma = np.sum(dout * x_normalized, axis=0)
+    dx_normalized = dout * gamma
+
+    dstd_inv = 1.0 / sample_std
+    dxc_dstd = -(x - sample_mean) * (sample_std**-2)  # -xc/sigma^2
+    dstd = np.sum(dx_normalized * dxc_dstd, axis=0)  # 形状 (D,)
+
+    dvar = dstd * (0.5 / sample_std)  # 形状 (D,)
+
+
+    dxc_path1 = dx_normalized * dstd_inv  # 形状 (N, D)
+
+
+    dxc_path2 = (2.0 / N) * (x - sample_mean) * dvar  # 形状 (N, D)
+
+    # 将两个路径的梯度相加
+    dxc = dxc_path1 + dxc_path2  # 形状 (N, D)
+
+    dmu_path1 = -np.sum(dxc, axis=0)  # 形状 (D,)
+
+    dmu = dmu_path1
+
+    dx_path1 = dxc  # 形状 (N, D)
+
+    dx_path2 = (1.0 / N) * dmu  # 形状 (N, D)
+
+    dx = dx_path1 + dx_path2  # 形状 (N, D)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -280,7 +309,21 @@ def batchnorm_backward_alt(dout, cache):
     # should be able to compute gradients with respect to the inputs in a     #
     # single statement; our implementation fits on a single 80-character line.#
     ###########################################################################
-    # 
+    (x, sample_mean, sample_var, sample_std, x_normalized, gamma, eps) = cache
+    N, D = dout.shape
+    dbeta = np.sum(dout, axis=0)
+    dgamma = np.sum(dout * x_normalized, axis=0)
+
+    dx_normalized = dout * gamma
+
+    sum_dxn = np.sum(dx_normalized, axis=0)
+    # sum(dx_hat * x_hat)
+    sum_dxn_xhat = np.sum(dx_normalized * x_normalized, axis=0)
+
+    # 4b. 组合成单行表达式 (如注释所提示)
+    dx = (gamma / (N * sample_std)) * (
+        (N * dx_normalized) - sum_dxn - (x_normalized * sum_dxn_xhat)
+    )
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
