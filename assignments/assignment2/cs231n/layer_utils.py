@@ -1,6 +1,52 @@
 from .layers import *
 from .fast_layers import *
 
+def affine_bn_relu_forward(x, w, b, gamma, beta, bn_param):
+    """
+    Convenience layer that performs an affine transform followed by
+    Batch Normalization and a ReLU.
+
+    Inputs:
+    - x: Input to the affine layer
+    - w, b: Weights for the affine layer
+    - gamma, beta: Parameters for the batch normalization layer
+    - bn_param: Parameters for the batch normalization layer
+
+    Returns a tuple of:
+    - out: Output from the ReLU
+    - cache: Object to give to the backward pass
+    """
+    # 1. 仿射层
+    a, fc_cache = affine_forward(x, w, b)
+
+    # 2. 批量归一化层
+    an, bn_cache = batchnorm_forward(a, gamma, beta, bn_param)
+
+    # 3. ReLU 激活
+    out, relu_cache = relu_forward(an)
+
+    # 打包所有缓存以备反向传播使用
+    cache = (fc_cache, bn_cache, relu_cache)
+    return out, cache
+
+
+def affine_bn_relu_backward(dout, cache):
+    """
+    Backward pass for the affine-bn-relu convenience layer
+    """
+    fc_cache, bn_cache, relu_cache = cache
+
+    # 1. ReLU 反向
+    dan = relu_backward(dout, relu_cache)
+
+    # 2. 批量归一化反向
+    da, dgamma, dbeta = batchnorm_backward_alt(dan, bn_cache)  # 使用更快的 alt 版本
+
+    # 3. 仿射层反向
+    dx, dw, db = affine_backward(da, fc_cache)
+
+    return dx, dw, db, dgamma, dbeta
+
 
 def affine_relu_forward(x, w, b):
     """
