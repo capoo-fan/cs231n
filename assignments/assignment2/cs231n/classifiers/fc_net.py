@@ -237,7 +237,6 @@ class FullyConnectedNet(object):
             if self.normalization == "batchnorm" and i < self.num_layers - 1:
                 gamma_key = "gamma" + str(i + 1)
                 beta_key = "beta" + str(i + 1)
-
                 # gamma 初始化为 1
                 self.params[gamma_key] = np.ones(dim_out)
                 # beta 初始化为 0
