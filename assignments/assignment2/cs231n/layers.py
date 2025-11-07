@@ -383,7 +383,13 @@ def layernorm_forward(x, gamma, beta, ln_param):
     # transformations you could perform, that would enable you to copy over   #
     # the batch norm code and leave it almost unchanged?                      #
     ###########################################################################
-    # 
+    N,D=x.shape
+    sample_mean = np.mean(x, axis=1, keepdims=True)  # 按行计算均值
+    sample_var = np.var(x, axis=1, keepdims=True)    # 按行计算方差
+    sample_std = np.sqrt(sample_var + eps)
+    x_normalized = (x - sample_mean) / sample_std
+    out = gamma * x_normalized + beta
+    cache = (x, sample_mean, sample_var, sample_std, x_normalized, gamma, eps)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -413,7 +419,39 @@ def layernorm_backward(dout, cache):
     # implementation of batch normalization. The hints to the forward pass    #
     # still apply!                                                            #
     ###########################################################################
-    # 
+    (x, gamma, sample_mean, sample_var, sample_std, x_normalized, eps) = cache
+    N, D = x.shape
+    dbeta = np.sum(dout, axis=0)  # 形状 (D,)
+
+    # dgamma = dL/dgamma = sum(dL/dy * x_hat) (沿 N 维求和)
+    dgamma = np.sum(dout * x_normalized, axis=0)  # 形状 (D,)
+
+    # 3. 计算 dL/d(x_hat) (与 BN 相同)
+    # dL/dx_hat = dL/dy * gamma
+    dx_normalized = dout * gamma  # 形状 (N, D)
+
+    # 4. 计算 dx (使用 LN 版本的简化公式)
+    # 这是从 batchnorm_backward_alt 修改而来的：
+    # N -> D
+    # axis=0 -> axis=1
+    # sample_std 的形状现在是 (N, 1)，广播机制会自动处理
+
+    # sum(dL/dx_hat) (沿 D 维求和)
+    sum_dxn = np.sum(dx_normalized, axis=1, keepdims=True)  # 形状 (N, 1)
+
+    # sum(dL/dx_hat * x_hat) (沿 D 维求和)
+    sum_dxn_xhat = np.sum(
+        dx_normalized * x_normalized, axis=1, keepdims=True
+    )  # 形状 (N, 1)
+
+    # 应用简化的反向传播公式
+    # (gamma / (D * sample_std)) 是 (D,) / (N, 1) -> (N, D) (通过广播)
+    # (D * dx_normalized) 是 (N, D)
+    # (sum_dxn) 是 (N, 1)
+    # (x_normalized * sum_dxn_xhat) 是 (N, D) * (N, 1) -> (N, D) (通过广播)
+    dx = (gamma / (D * sample_std)) * (
+        (D * dx_normalized) - sum_dxn - (x_normalized * sum_dxn_xhat)
+    )
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
