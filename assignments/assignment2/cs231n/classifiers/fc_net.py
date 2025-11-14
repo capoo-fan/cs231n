@@ -72,7 +72,22 @@ class FullyConnectedNet(object):
         # beta2, etc. Scale parameters should be initialized to ones and shift     #
         # parameters should be initialized to zeros.                               #
         ############################################################################
-        # 
+        dims = [input_dim] + hidden_dims + [num_classes] # 所有层的维度列表
+
+        for i in range(self.num_layers): # i 从 0 到 L-1
+            layer_num = i + 1
+            
+            # 初始化 W 和 b
+            # W{i+1} 的形状是 (dims[i], dims[i+1])
+            # b{i+1} 的形状是 (dims[i+1],)
+            self.params[f'W{layer_num}'] = weight_scale * np.random.randn(dims[i], dims[i+1])
+            self.params[f'b{layer_num}'] = np.zeros(dims[i+1])
+
+            # 如果使用 BN 或 LN，并且不是最后一层，则初始化 gamma 和 beta
+            if self.normalization is not None and i < self.num_layers - 1:
+                # gamma 和 beta 的形状与 b 相同
+                self.params[f'gamma{layer_num}'] = np.ones(dims[i+1])
+                self.params[f'beta{layer_num}'] = np.zeros(dims[i+1])
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -142,7 +157,51 @@ class FullyConnectedNet(object):
         # self.bn_params[1] to the forward pass for the second batch normalization #
         # layer, etc.                                                              #
         ############################################################################
-        
+        current_input = X
+        caches = {} # 存储每一层的缓存
+
+        # --- 前向传播 ---
+        # 循环 {affine - [bn/ln] - relu - [dropout]} x (L - 1) 次
+        for i in range(1, self.num_layers):
+            W = self.params[f'W{i}']
+            b = self.params[f'b{i}']
+            
+            cache_affine = None
+            cache_norm = None
+            cache_relu = None
+            cache_dropout = None
+
+            # 1. Affine
+            current_input, cache_affine = affine_forward(current_input, W, b)
+            
+            # 2. Normalization
+            if self.normalization == "batchnorm":
+                gamma = self.params[f'gamma{i}']
+                beta = self.params[f'beta{i}']
+                bn_param = self.bn_params[i-1]
+                current_input, cache_norm = batchnorm_forward(current_input, gamma, beta, bn_param)
+            elif self.normalization == "layernorm":
+                gamma = self.params[f'gamma{i}']
+                beta = self.params[f'beta{i}']
+                # ln_param 是一个空字典，但我们从 self.bn_params[i-1] 获取它以保持一致性
+                ln_param = self.bn_params[i-1] 
+                current_input, cache_norm = layernorm_forward(current_input, gamma, beta, ln_param)
+
+            # 3. ReLU
+            current_input, cache_relu = relu_forward(current_input)
+            
+            # 4. Dropout
+            if self.use_dropout:
+                current_input, cache_dropout = dropout_forward(current_input, self.dropout_param)
+
+            # 存储所有缓存
+            caches[i] = (cache_affine, cache_norm, cache_relu, cache_dropout)
+            
+        # 5. 最后一层 (第 L 层) - 只有 Affine
+        W_last = self.params[f'W{self.num_layers}']
+        b_last = self.params[f'b{self.num_layers}']
+        scores, cache_last = affine_forward(current_input, W_last, b_last)
+        caches[self.num_layers] = cache_last # 存储最后一层的缓存
         
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -166,7 +225,56 @@ class FullyConnectedNet(object):
         # automated tests, make sure that your L2 regularization includes a factor #
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
-        # 
+        loss, dscores = softmax_loss(scores, y)
+        
+        l2_reg_loss = 0.0
+        for i in range(1, self.num_layers + 1):
+            W = self.params[f'W{i}']
+            l2_reg_loss += 0.5 * self.reg * np.sum(W * W)
+        loss += l2_reg_loss
+
+        # 2. 最后一层 (第 L 层) 的反向传播 (Affine)
+        current_dout = dscores
+        cache_affine_last = caches[self.num_layers]
+        
+        dx, dw, db = affine_backward(current_dout, cache_affine_last)
+        
+        grads[f'W{self.num_layers}'] = dw + self.reg * self.params[f'W{self.num_layers}']
+        grads[f'b{self.num_layers}'] = db
+        
+        current_dout = dx # 更新上游梯度，准备进入循环
+
+        # 3. 循环 L-1 个隐藏层的反向传播
+        for i in range(self.num_layers - 1, 0, -1):
+            # 按照前向传播的相反顺序解包缓存
+            (cache_affine, cache_norm, cache_relu, cache_dropout) = caches[i]
+            
+            # 4. Dropout backward
+            if self.use_dropout:
+                current_dout = dropout_backward(current_dout, cache_dropout)
+            
+            # 3. ReLU backward
+            current_dout = relu_backward(current_dout, cache_relu)
+
+            # 2. Normalization backward
+            if self.normalization == "batchnorm":
+                current_dout, dgamma, dbeta = batchnorm_backward_alt(current_dout, cache_norm)
+                grads[f'gamma{i}'] = dgamma
+                grads[f'beta{i}'] = dbeta
+            elif self.normalization == "layernorm":
+                current_dout, dgamma, dbeta = layernorm_backward(current_dout, cache_norm)
+                grads[f'gamma{i}'] = dgamma
+                grads[f'beta{i}'] = dbeta
+                
+            # 1. Affine backward
+            dx, dw, db = affine_backward(current_dout, cache_affine)
+            
+            # 存储梯度
+            grads[f'W{i}'] = dw + self.reg * self.params[f'W{i}']
+            grads[f'b{i}'] = db
+            
+            # 为下一次循环（更前一层）更新上游梯度
+            current_dout = dx
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
