@@ -626,7 +626,9 @@ def conv_backward_naive(dout, cache):
     dx_padded = np.zeros((N, C, H + 2 * pad, W + 2 * pad))
     dw = np.zeros_like(w)
     db = np.zeros_like(b)
-    x_padded = np.pad(x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), "constant", constant_values=0)
+    x_padded = np.pad(
+        x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), "constant", constant_values=0
+    )
     for n in range(N):
         for f in range(F):
             for i in range(H_out):
@@ -638,8 +640,10 @@ def conv_backward_naive(dout, cache):
                     window = x_padded[n, :, h_start:h_end, w_start:w_end]
                     dw[f] += window * dout[n, f, i, j]
                     db[f] += dout[n, f, i, j]
-                    dx_padded[n,:,h_start:h_end,w_start:w_end] += w[f] * dout[n,f,i,j]
-    dx = dx_padded[:, :, pad:pad+H , pad:pad+W]
+                    dx_padded[n, :, h_start:h_end, w_start:w_end] += (
+                        w[f] * dout[n, f, i, j]
+                    )
+    dx = dx_padded[:, :, pad : pad + H, pad : pad + W]
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -674,8 +678,8 @@ def max_pool_forward_naive(x, pool_param):
     pool_height = pool_param["pool_height"]
     pool_width = pool_param["pool_width"]
     stride = pool_param["stride"]
-    H_out = 1 + (H - pool_height) // stride #高度上的输出尺寸 
-    W_out = 1 + (W - pool_width) // stride #宽度上的输出尺寸
+    H_out = 1 + (H - pool_height) // stride  # 高度上的输出尺寸
+    W_out = 1 + (W - pool_width) // stride  # 宽度上的输出尺寸
     out = np.zeros((N, C, H_out, W_out))
     for n in range(N):
         for c in range(C):
@@ -726,7 +730,7 @@ def max_pool_backward_naive(dout, cache):
                     w_end = w_start + pool_width
                     window = x[n, c, h_start:h_end, w_start:w_end]
                     max_val = np.max(window)
-                    mask = (window == max_val)
+                    mask = window == max_val
                     dx[n, c, h_start:h_end, w_start:w_end] += mask * dout[n, c, i, j]
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -764,7 +768,10 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    #
+    N, C, H, W = x.shape
+    x = x.transpose(0, 2, 3, 1).reshape(N * H * W, C)
+    out, cache = batchnorm_forward(x, gamma, beta, bn_param)
+    out = out.reshape(N, H, W, C).transpose(0, 3, 1, 2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -793,7 +800,10 @@ def spatial_batchnorm_backward(dout, cache):
     # vanilla version of batch normalization you implemented above.           #
     # Your implementation should be very short; ours is less than five lines. #
     ###########################################################################
-    #
+    N, C, H, W = dout.shape
+    dout = dout.transpose(0, 2, 3, 1).reshape(N * H * W, C)
+    dx, dgamma, dbeta = batchnorm_backward_alt(dout, cache)
+    dx = dx.reshape(N, H, W, C).transpose(0, 3, 1, 2)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -830,7 +840,31 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     # the bulk of the code is similar to both train-time batch normalization  #
     # and layer normalization!                                                #
     ###########################################################################
-    #
+    # 1. 获取输入维度
+    N, C, H, W = x.shape
+
+    # 2. 关键步骤：将输入 (N, C, H, W) 重塑为 (N, G, D_group)
+    #    其中 D_group = (C/G) * H * W，这是我们要归一化的维度
+    #    (N, C, H, W) -> (N, G, C//G, H, W)  (在概念上分组)
+    #    (N, G, C//G, H, W) -> (N * G, C//G * H * W) (为 2D 归一化做准备)
+    #    我们选择 (N*G, -1) 是为了方便调用普通的 norm 函数，
+    #    但从数学上讲，(N, G, -1) 更清晰。我们这里用 (N, G, -1) 来计算。
+    x_grouped = x.reshape(N, G, -1)  # 形状变为 (N, G, (C//G)*H*W)
+    # 3. 像层归一化 (Layer Norm) 一样，计算均值和方差
+    #    但我们是在最后一个维度 (D_group) 上计算
+    #    为每个样本 (N) 和每个组 (G) 独立计算
+    mean = np.mean(x_grouped, axis=2, keepdims=True)  # 形状 (N, G, 1)
+    var = np.var(x_grouped, axis=2, keepdims=True)  # 形状 (N, G, 1)
+    std = np.sqrt(var + eps)  # 形状 (N, G, 1)
+    # 4. 执行归一化
+    x_normalized_grouped = (x_grouped - mean) / std  # 形状 (N, G, D_group)
+    # 5. 将形状恢复为 (N, C, H, W)
+    x_normalized = x_normalized_grouped.reshape(N, C, H, W)
+    # 6. 应用逐通道的缩放 (gamma) 和平移 (beta)
+    #    gamma 和 beta 的形状是 (1, C, 1, 1)，它们会自动广播
+    out = x_normalized * gamma + beta
+    # 7. 存储反向传播所需的值
+    cache = (x, G, mean, var, std, x_normalized_grouped, gamma, eps)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -855,7 +889,54 @@ def spatial_groupnorm_backward(dout, cache):
     # TODO: Implement the backward pass for spatial group normalization.      #
     # This will be extremely similar to the layer norm implementation.        #
     ###########################################################################
-    #
+    # 1. 从缓存解压前向传播时保存的变量
+    # (假设 cache 是按照我们前一个回答中 `spatial_groupnorm_forward` 的方式保存的)
+    x, G, mean, var, std, x_normalized_grouped, gamma, eps = cache
+
+    # 2. 获取维度
+    N, C, H, W = dout.shape
+    D_group = (C // G) * H * W
+
+    # 3. 步骤 1：反向传播 gamma 和 beta
+    # dbeta 和 dgamma 的形状是 (1, C, 1, 1)
+    # 我们沿着 N, H, W 维度求和
+    dbeta = np.sum(dout, axis=(0, 2, 3), keepdims=True)
+
+    # x_normalized = x_normalized_grouped.reshape(N, C, H, W)
+    x_normalized = x_normalized_grouped.reshape(N, C, H, W)
+    dgamma = np.sum(dout * x_normalized, axis=(0, 2, 3), keepdims=True)
+
+    # 上游梯度 dx_normalized (形状 (N, C, H, W))
+    dx_normalized = dout * gamma
+
+    # 4. 步骤 2：反向传播 Reshape
+    # (N, C, H, W) -> (N, G, D_group)
+    dx_normalized_grouped = dx_normalized.reshape(N, G, -1)
+
+    # 5. 步骤 3：反向传播归一化 (复制 layernorm_backward 的逻辑)
+
+    # 5a. sum(dL/dx_hat) (沿 D_group 维求和)
+    sum_dxn = np.sum(dx_normalized_grouped, axis=2, keepdims=True)  # 形状 (N, G, 1)
+
+    # 5b. sum(dL/dx_hat * x_hat) (沿 D_group 维求和)
+    sum_dxn_xhat = np.sum(
+        dx_normalized_grouped * x_normalized_grouped, axis=2, keepdims=True
+    )  # 形状 (N, G, 1)
+
+    # 5c. 应用简化的 LN 反向传播公式 (适应 SGN)
+    # (1 / (D_group * std)) 的形状是 (N, G, 1)
+    # (D_group * dx_normalized_grouped) 是 (N, G, D_group)
+    # (sum_dxn) 是 (N, G, 1)
+    # (x_normalized_grouped * sum_dxn_xhat) 是 (N, G, D_group)
+    dx_grouped = (1.0 / (D_group * std)) * (
+        (D_group * dx_normalized_grouped)
+        - sum_dxn
+        - (x_normalized_grouped * sum_dxn_xhat)
+    )
+
+    # 6. 步骤 4：反向传播 Reshape
+    # (N, G, D_group) -> (N, C, H, W)
+    dx = dx_grouped.reshape(N, C, H, W)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
