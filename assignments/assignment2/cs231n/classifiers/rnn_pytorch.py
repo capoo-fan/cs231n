@@ -138,7 +138,30 @@ class CaptioningRNN:
         #                                                                          #
         # You also don't have to implement the backward pass.                      #
         ############################################################################
-        # 
+        # (1) 将图像特征映射到初始隐藏状态 h0
+        # features: (N, D) -> h0: (N, H)
+        h0 = affine_forward(features, W_proj, b_proj)
+
+        # (2) 将输入的单词索引转换为词向量
+        # captions_in: (N, T) -> x: (N, T, W)
+        x = word_embedding_forward(captions_in, W_embed)
+
+        # (3) 通过 RNN/LSTM 处理序列
+        # x: (N, T, W), h0: (N, H) -> h: (N, T, H)
+        if self.cell_type == "rnn":
+            h = rnn_forward(x, h0, Wx, Wh, b)
+        elif self.cell_type == "lstm":
+            h = lstm_forward(x, h0, Wx, Wh, b)
+        else:
+            raise ValueError('Invalid cell_type "%s"' % self.cell_type)
+
+        # (4) 计算每个时间步的词汇表得分
+        # h: (N, T, H) -> scores: (N, T, V)
+        scores = temporal_affine_forward(h, W_vocab, b_vocab)
+
+        # (5) 计算损失
+        # scores: (N, T, V), captions_out: (N, T) -> loss: Scalar
+        loss = temporal_softmax_loss(scores, captions_out, mask)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################

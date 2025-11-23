@@ -74,7 +74,24 @@ def rnn_forward(x, h0, Wx, Wh, b):
     # input data. You should use the rnn_step_forward function that you defined  #
     # above. You can use a for loop to help compute the forward pass.            #
     ##############################################################################
-    #
+    N, T, D = x.shape
+    _,H=h0.shape
+    h = torch.zeros((N, T, H), dtype=x.dtype, device=x.device)
+    prev_h = h0
+
+    # 4. 循环时间步
+    for t in range(T):
+        # 获取当前时刻的输入 x_t，形状 (N, D)
+        xt = x[:, t, :]
+
+        # 调用单步前向传播
+        next_h = rnn_step_forward(xt, prev_h, Wx, Wh, b)
+
+        # 保存结果到 h
+        h[:, t, :] = next_h
+
+        # 更新 prev_h 供下一步使用
+        prev_h = next_h
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
@@ -102,7 +119,7 @@ def word_embedding_forward(x, W):
     #                                                                            #
     # HINT: This can be done in one line using Pytorch's array indexing.         #
     ##############################################################################
-    # out = W[x]
+    out = W[x]
     ##############################################################################
     #                               END OF YOUR CODE                             #
     ##############################################################################
