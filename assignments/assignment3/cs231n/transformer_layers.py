@@ -155,7 +155,60 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
+        ############################################################################
+        # TODO: Implement multiheaded attention using the equations given in       #
+        # Transformer_Captioning.ipynb.                                            #
+        ############################################################################
 
+        # 获取头数 (H) 和每个头的维度 (D)
+        H = self.n_head
+        D = self.head_dim
+
+        # 1. 线性投影 (Linear Projections)
+        # 将输入通过线性层映射到 Query, Key, Value 空间
+        # Q shape: (N, S, E), K shape: (N, T, E), V shape: (N, T, E)
+        Q = self.query(query)
+        K = self.key(key)
+        V = self.value(value)
+
+        # 2. 分头 (Split Heads)
+        # 将特征维度 E 拆分为 H * D
+        # 变换形状: (N, Seq_Len, E) -> (N, Seq_Len, H, D) -> (N, H, Seq_Len, D)
+        # permute/transpose 是为了将 H 放在前面，以便进行批量的矩阵乘法
+        Q = Q.view(N, S, H, D).transpose(1, 2)  # Q shape: (N, H, S, D)
+        K = K.view(N, T, H, D).transpose(1, 2)  # K shape: (N, H, T, D)
+        V = V.view(N, T, H, D).transpose(1, 2) # V shape: (N, H, T, D)
+
+        # 3. 计算注意力分数 (Scaled Dot-Product)
+        # 公式: Q * K^T / sqrt(D)
+        # Q: (N, H, S, D), K^T: (N, H, D, T) -> scores: (N, H, S, T)
+        scores = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(D)
+
+        # 4. 应用掩码 (Apply Mask)
+        if attn_mask is not None:
+            # attn_mask 形状通常为 (S, T)，会自动广播到 (N, H, S, T)
+            # 根据文档，mask 为 0 的位置表示需要被遮挡（不进行注意力计算）
+            # 我们用一个极小的数（-1e9）填充这些位置，这样在 Softmax 后概率接近 0
+            scores = scores.masked_fill(attn_mask == 0, -1e9)
+
+        # 5. Softmax 和 Dropout
+        # 在最后一个维度 (T) 上归一化，得到注意力权重
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_weights = self.attn_drop(attn_weights)
+
+        # 6. 加权求和 (Weighted Sum)
+        # 公式: Attention(Q, K, V) = softmax(...) * V
+        # weights: (N, H, S, T), V: (N, H, T, D) -> output: (N, H, S, D)
+        output = torch.matmul(attn_weights, V)
+
+        # 7. 拼接头 (Concatenate Heads)
+        # 将多头的结果拼回去
+        # (N, H, S, D) -> (N, S, H, D) -> (N, S, E)
+        # 注意：view 操作前必须保证内存连续，所以需要调用 contiguous()
+        output = output.transpose(1, 2).contiguous().view(N, S, E)
+
+        # 8. 最终线性投影 (Output Projection)
+        output = self.proj(output)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
