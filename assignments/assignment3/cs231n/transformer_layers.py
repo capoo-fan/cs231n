@@ -7,12 +7,14 @@ import math
 This file defines layer types that are commonly used for transformers.
 """
 
+
 class PositionalEncoding(nn.Module):
     """
     Encodes information about the positions of the tokens in the sequence. In
     this case, the layer has no learnable parameters, since it is a simple
     function of sines and cosines.
     """
+
     def __init__(self, embed_dim, dropout=0.1, max_len=5000):
         """
         Construct the PositionalEncoding layer.
@@ -36,14 +38,28 @@ class PositionalEncoding(nn.Module):
         # this is what the autograder is expecting. For reference, our solution is #
         # less than 5 lines of code.                                               #
         ############################################################################
+        # 1. 生成位置索引: [0, 1, ..., max_len-1] -> 形状 (max_len, 1)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
 
+        # 2. 计算分母中的指数项 (div_term)
+        # 公式中频率项是 10000^(-2j/d)，这等价于 exp(-2j * log(10000) / d)
+        # 我们只需要计算偶数索引 j = 0, 2, 4...
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim)
+        )
+
+        # 3. 填充 pe 矩阵
+        # 偶数维度使用 sin
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        # 奇数维度使用 cos
+        pe[0, :, 1::2] = torch.cos(position * div_term)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
 
         # Make sure the positional encodings will be saved with the model
         # parameters (mostly for completeness).
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
         """
@@ -64,7 +80,13 @@ class PositionalEncoding(nn.Module):
         # appropriate ones to the input sequence. Don't forget to apply dropout    #
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
+        # 1. 截取与输入序列长度 S 相匹配的位置编码
+        # self.pe 的形状是 (1, max_len, D)，我们需要切片成 (1, S, D)
+        # 它会自动广播到输入的 batch size (N, S, D)
+        output = x + self.pe[:, :S, :]
 
+        # 2. 应用 Dropout
+        output = self.dropout(output)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -109,7 +131,7 @@ class MultiHeadAttention(nn.Module):
         self.query = nn.Linear(embed_dim, embed_dim)
         self.value = nn.Linear(embed_dim, embed_dim)
         self.proj = nn.Linear(embed_dim, embed_dim)
-        
+
         self.attn_drop = nn.Dropout(dropout)
 
         self.n_head = num_heads
@@ -155,60 +177,49 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
-        ############################################################################
-        # TODO: Implement multiheaded attention using the equations given in       #
-        # Transformer_Captioning.ipynb.                                            #
-        ############################################################################
-
-        # 获取头数 (H) 和每个头的维度 (D)
-        H = self.n_head
-        D = self.head_dim
-
         # 1. 线性投影 (Linear Projections)
-        # 将输入通过线性层映射到 Query, Key, Value 空间
-        # Q shape: (N, S, E), K shape: (N, T, E), V shape: (N, T, E)
-        Q = self.query(query)
-        K = self.key(key)
-        V = self.value(value)
+        # q, k, v 的形状变化: (N, S/T, E) -> (N, S/T, E)
+        q = self.query(query)
+        k = self.key(key)
+        v = self.value(value)
 
-        # 2. 分头 (Split Heads)
-        # 将特征维度 E 拆分为 H * D
-        # 变换形状: (N, Seq_Len, E) -> (N, Seq_Len, H, D) -> (N, H, Seq_Len, D)
-        # permute/transpose 是为了将 H 放在前面，以便进行批量的矩阵乘法
-        Q = Q.view(N, S, H, D).transpose(1, 2)  # Q shape: (N, H, S, D)
-        K = K.view(N, T, H, D).transpose(1, 2)  # K shape: (N, H, T, D)
-        V = V.view(N, T, H, D).transpose(1, 2) # V shape: (N, H, T, D)
+        # 2. 拆分多头 (Split Heads)
+        # 我们需要将形状从 (N, SeqLen, E) 变为 (N, H, SeqLen, E/H)
+        # view: (N, S, E) -> (N, S, H, E/H)
+        # transpose: (N, S, H, E/H) -> (N, H, S, E/H)
+        q = q.view(N, S, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(N, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(N, T, self.n_head, self.head_dim).transpose(1, 2)
 
-        # 3. 计算注意力分数 (Scaled Dot-Product)
-        # 公式: Q * K^T / sqrt(D)
-        # Q: (N, H, S, D), K^T: (N, H, D, T) -> scores: (N, H, S, T)
-        scores = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(D)
+        # 3. 计算缩放点积注意力分数 (Scaled Dot-Product Attention Scores)
+        # (N, H, S, E/H) @ (N, H, E/H, T) -> (N, H, S, T)
+        scores = torch.matmul(q, k.transpose(-2, -1))
+        scores = scores / math.sqrt(self.head_dim)
 
         # 4. 应用掩码 (Apply Mask)
+        # 如果 mask 是 0，说明该位置不应该被关注，我们将其分数设为负无穷
+        # 这样经过 Softmax 后，该位置的概率将趋近于 0
         if attn_mask is not None:
-            # attn_mask 形状通常为 (S, T)，会自动广播到 (N, H, S, T)
-            # 根据文档，mask 为 0 的位置表示需要被遮挡（不进行注意力计算）
-            # 我们用一个极小的数（-1e9）填充这些位置，这样在 Softmax 后概率接近 0
-            scores = scores.masked_fill(attn_mask == 0, -1e9)
+            # attn_mask 形状通常是 (S, T)，会自动广播到 (N, H, S, T)
+            scores = scores.masked_fill(attn_mask == 0, float("-inf"))
 
         # 5. Softmax 和 Dropout
-        # 在最后一个维度 (T) 上归一化，得到注意力权重
+        # 在最后一个维度 (T) 上进行 Softmax，得到注意力权重
         attn_weights = F.softmax(scores, dim=-1)
         attn_weights = self.attn_drop(attn_weights)
 
         # 6. 加权求和 (Weighted Sum)
-        # 公式: Attention(Q, K, V) = softmax(...) * V
-        # weights: (N, H, S, T), V: (N, H, T, D) -> output: (N, H, S, D)
-        output = torch.matmul(attn_weights, V)
+        # (N, H, S, T) @ (N, H, T, E/H) -> (N, H, S, E/H)
+        context = torch.matmul(attn_weights, v)
 
-        # 7. 拼接头 (Concatenate Heads)
-        # 将多头的结果拼回去
-        # (N, H, S, D) -> (N, S, H, D) -> (N, S, E)
-        # 注意：view 操作前必须保证内存连续，所以需要调用 contiguous()
-        output = output.transpose(1, 2).contiguous().view(N, S, E)
+        # 7. 拼接多头 (Concatenate Heads)
+        # transpose: (N, H, S, E/H) -> (N, S, H, E/H)
+        # reshape/view: (N, S, H, E/H) -> (N, S, E)
+        # contiguous() 是必须的，因为 transpose 后内存不再连续，无法直接 view
+        context = context.transpose(1, 2).contiguous().view(N, S, E)
 
-        # 8. 最终线性投影 (Output Projection)
-        output = self.proj(output)
+        # 8. 输出投影 (Output Projection)
+        output = self.proj(context)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -255,7 +266,9 @@ class TransformerDecoderLayer(nn.Module):
     """
     A single layer of a Transformer decoder, to be used with TransformerDecoder.
     """
+
     def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
+
         """
         Construct a TransformerDecoderLayer instance.
 
@@ -265,6 +278,7 @@ class TransformerDecoderLayer(nn.Module):
          - dim_feedforward: Dimension of the feedforward network model.
          - dropout: The dropout value.
         """
+
         super().__init__()
         self.self_attn = MultiHeadAttention(input_dim, num_heads, dropout)
         self.cross_attn = MultiHeadAttention(input_dim, num_heads, dropout)
@@ -277,7 +291,6 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout_self = nn.Dropout(dropout)
         self.dropout_cross = nn.Dropout(dropout)
         self.dropout_ffn = nn.Dropout(dropout)
-
 
     def forward(self, tgt, memory, tgt_mask=None):
         """
@@ -305,7 +318,40 @@ class TransformerDecoderLayer(nn.Module):
         # memory, and (2) the feedforward block. Each block should follow the      #
         # same structure as self-attention implemented just above.                 #
         ############################################################################
+        # --- 2. Cross-attention block (交叉注意力) ---
+        # 保存当前的 tgt 作为残差连接的 shortcut
+        shortcut = tgt
 
+        # 执行交叉注意力。
+        # Query 是解码器当前的输入 (tgt)
+        # Key 和 Value 是编码器的输出 (memory)
+        # 这里不需要 attn_mask，因为解码器可以看到编码器的所有输出
+        tgt = self.cross_attn(query=tgt, key=memory, value=memory)
+
+        # 应用 Dropout 防止过拟合
+        tgt = self.dropout_cross(tgt)
+
+        # 残差连接：将处理后的结果与输入前的 shortcut 相加
+        tgt = tgt + shortcut
+
+        # 层归一化：稳定训练过程
+        tgt = self.norm_cross(tgt)
+
+        # --- 3. Feedforward block (前馈网络) ---
+        # 保存当前的 tgt 作为残差连接的 shortcut
+        shortcut = tgt
+
+        # 将数据传入前馈网络 (FFN)
+        tgt = self.ffn(tgt)
+
+        # 应用 Dropout
+        tgt = self.dropout_ffn(tgt)
+
+        # 残差连接
+        tgt = tgt + shortcut
+
+        # 层归一化
+        tgt = self.norm_ffn(tgt)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -324,6 +370,7 @@ class PatchEmbedding(nn.Module):
     - in_channels: Number of input image channels (e.g., 3 for RGB).
     - embed_dim: Dimension of the linear embedding space.
     """
+
     def __init__(self, img_size, patch_size, in_channels=3, embed_dim=128):
         super().__init__()
 
@@ -332,14 +379,15 @@ class PatchEmbedding(nn.Module):
         self.in_channels = in_channels
         self.embed_dim = embed_dim
 
-        assert img_size % patch_size == 0, "Image dimensions must be divisible by the patch size."
+        assert img_size % patch_size == 0, (
+            "Image dimensions must be divisible by the patch size."
+        )
 
         self.num_patches = (img_size // patch_size) ** 2
         self.patch_dim = patch_size * patch_size * in_channels
 
         # Linear projection of flattened patches to the embedding dimension
         self.proj = nn.Linear(self.patch_dim, embed_dim)
-
 
     def forward(self, x):
         """
@@ -352,8 +400,9 @@ class PatchEmbedding(nn.Module):
         - out: Patch embeddings with shape (N, num_patches, embed_dim)
         """
         N, C, H, W = x.shape
-        assert H == self.img_size and W == self.img_size, \
+        assert H == self.img_size and W == self.img_size, (
             f"Expected image size ({self.img_size}, {self.img_size}), but got ({H}, {W})"
+        )
         out = torch.zeros(N, self.embed_dim)
 
         ############################################################################
@@ -364,19 +413,40 @@ class PatchEmbedding(nn.Module):
         # step. Once the patches are flattened, embed them into latent vectors     #
         # using the projection layer.                                              #
         ############################################################################
+        # 1. 准备维度参数
+        # P: patch_size (每个 patch 的边长)
+        P = self.patch_size
 
+        # 2. 使用 unfold 或者 reshape + permute 将图像切分成 patches
+        # 目标形状变化逻辑：
+        # 输入: (N, C, H, W)
+        # Reshape -> (N, C, H // P, P, W // P, P)
+        #   这里我们将 H 和 W 分别拆成了 (Patch个数, Patch大小)
+        # Permute -> (N, H // P, W // P, C, P, P)
+        #   将 Patch 的行列索引移到前面，将 C, P, P (一个 patch 的所有像素) 移到后面
+        # Reshape -> (N, (H // P) * (W // P), C * P * P)
+        #   将 patch 的空间位置展平成序列 (num_patches)，将像素值展平成特征向量 (patch_dim)
+
+        x = x.reshape(N, C, H // P, P, W // P, P)
+        x = x.permute(0, 2, 4, 1, 3, 5) # x(N, num_patches_h, num_patches_w, C, P, P)
+        x = x.reshape(N, -1, C * P * P)  # 现在的形状是 (N, num_patches, patch_dim)
+
+        # 3. 线性投影
+        # 将每个 patch 的特征向量 (patch_dim) 投影到嵌入维度 (embed_dim)
+        # 输入形状: (N, num_patches, patch_dim)
+        # 输出形状: (N, num_patches, embed_dim)
+        out = self.proj(x)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
         return out
 
 
-
-
 class TransformerEncoderLayer(nn.Module):
     """
     A single layer of a Transformer encoder, to be used with TransformerEncoder.
     """
+
     def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
         """
         Construct a TransformerEncoderLayer instance.

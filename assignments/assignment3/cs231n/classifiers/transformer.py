@@ -88,7 +88,35 @@ class CaptioningTransformer(nn.Module):
         #  3) Finally, apply the decoder features on the text & image embeddings   #
         #     along with the tgt_mask. Project the output to scores per token      #
         ############################################################################
+        # 1. 文本嵌入与位置编码 (Embed Caption & Positional Encoding)
+        # 将 caption token 索引转换为向量：(N, T) -> (N, T, W)
+        caption_embed = self.embedding(captions)
+        # 加入位置编码，赋予模型对序列顺序的感知能力
+        caption_embed = self.positional_encoding(caption_embed)
 
+        # 2. 图像特征投影 (Project Image Features)
+        # 将图像特征从维度 D 投影到与文本向量相同的维度 W
+        # features: (N, D) -> projected_features: (N, 1, W) -> (N, S=1, W)
+        # 这里假设每个图像只有一个特征向量，所以源序列长度 S=1
+        projected_features = self.visual_projection(features).unsqueeze(1)
+
+        # 3. 构建目标序列掩码 (Target Mask)
+        # 这是一个下三角矩阵，用于实现自回归（Auto-regressive）特性
+        # 确保预测第 t 个词时，只能看到第 1 到 t 的词，看不到 t+1 之后的词
+        # shape: (T, T)
+        tgt_mask = torch.tril(torch.ones((T, T), device=features.device))
+
+        # 4. Transformer 解码器 (Transformer Decoder)
+        # 将文本作为 tgt (Target)，图像作为 memory (Source)
+        # decoder_output shape: (N, T, W)
+        decoder_output = self.transformer(
+            tgt=caption_embed, memory=projected_features, tgt_mask=tgt_mask
+        )
+
+        # 5. 输出投影 (Output Projection)
+        # 将隐藏层状态投影到词汇表大小，得到每个位置的词汇概率分布 Logits
+        # (N, T, W) -> (N, T, V)
+        scores = self.output(decoder_output)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
