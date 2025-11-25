@@ -482,7 +482,34 @@ class TransformerEncoderLayer(nn.Module):
         # TODO: Implement the encoder layer by applying self-attention followed    #
         # by a feedforward block. This code will be very similar to decoder layer. #
         ############################################################################
+        # 1. 保存输入用于残差连接
+        shortcut = src
 
+        # 2. 执行自注意力
+        # 在 Encoder 中，Query, Key, Value 都是 src 自己
+        src = self.self_attn(query=src, key=src, value=src, attn_mask=src_mask)
+
+        # 3. Dropout 和 残差连接
+        src = self.dropout_self(src)
+        src = src + shortcut
+
+        # 4. 层归一化
+        src = self.norm_self(src)
+
+        # --- 子层 2: 前馈神经网络 (Feed Forward Network) ---
+
+        # 5. 再次保存输入用于残差连接
+        shortcut = src
+
+        # 6. 执行前馈网络
+        src = self.ffn(src)
+
+        # 7. Dropout 和 残差连接
+        src = self.dropout_ffn(src)
+        src = src + shortcut
+
+        # 8. 层归一化
+        src = self.norm_ffn(src)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################

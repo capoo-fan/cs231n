@@ -268,7 +268,32 @@ class VisionTransformer(nn.Module):
         #    You may find torch.mean useful.                                      #
         # 5. Feed it through a linear layer to produce class logits.              #
         ############################################################################
+        # 1. 图像分块与嵌入 (Patch Embedding)
+        # 将输入图像切分为固定大小的补丁(patches)，并映射为嵌入向量
+        # 输入形状: (N, C, H, W)
+        # 输出形状: (N, Num_Patches, Embed_Dim)
+        x = self.patch_embed(x)
 
+        # 2. 添加位置编码 (Add Positional Encoding)
+        # 将位置信息加到嵌入向量上，使模型知道每个补丁在原图中的位置
+        # 输出形状保持不变: (N, Num_Patches, Embed_Dim)
+        x = self.positional_encoding(x)
+
+        # 3. Transformer 编码器处理 (Transformer Encoder)
+        # 通过多层 Transformer Encoder 处理序列，进行自注意力交互
+        # 输出形状保持不变: (N, Num_Patches, Embed_Dim)
+        x = self.transformer(x)
+
+        # 4. 全局平均池化 (Global Average Pooling)
+        # 对所有补丁的特征向量求平均，得到整张图像的特征表示
+        # 这一步消除了序列长度维度 (dim=1)
+        # 输出形状: (N, Embed_Dim)
+        x = torch.mean(x, dim=1)
+
+        # 5. 分类头 (Classification Head)
+        # 将图像特征向量通过线性层投影到类别空间，得到分类分数
+        # 输出形状: (N, Num_Classes)
+        logits = self.head(x)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
