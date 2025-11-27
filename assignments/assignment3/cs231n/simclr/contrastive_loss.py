@@ -186,8 +186,7 @@ def simclr_loss_vectorized(out_left, out_right, tau, device='cuda'):
     
     # This binary mask zeros out terms where k=i.
     # 创建一个掩码，把对角线（自己和自己的相似度）去掉，因为公式里要求 k != i
-    mask = (
-        (torch.ones_like(exponential, device=device) - torch.eye(2 * N, device=device)).to(device).bool())
+    mask = ((torch.ones_like(exponential, device=device) - torch.eye(2 * N, device=device)).to(device).bool())
     
     # We apply the binary mask.
     exponential = exponential.masked_select(mask).view(2 * N, -1)  # [2*N, 2*N-1]
