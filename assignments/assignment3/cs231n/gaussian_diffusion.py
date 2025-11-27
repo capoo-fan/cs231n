@@ -102,7 +102,12 @@ class GaussianDiffusion(nn.Module):
         # Transform x_t and noise to get x_start according to Eq.(4) and Eq.(14).
         # Look at the coeffs in `__init__` method and use the `extract` function.
         ####################################################################
+        # 1. 提取 sqrt(alpha_bar_t)
+        sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
 
+        # 2. 提取 sqrt(1 - alpha_bar_t)
+        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        x_start = (x_t - sqrt_one_minus_alpha_bar_t * noise) / sqrt_alpha_bar_t
         ####################################################################
         return x_start
 
@@ -121,7 +126,12 @@ class GaussianDiffusion(nn.Module):
         # Transform x_t and noise to get x_start according to Eq.(4) and Eq.(14).
         # Look at the coeffs in `__init__` method and use the `extract` function.
         ####################################################################
+        # 1. 提取 sqrt(alpha_bar_t)
+        sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
 
+        # 2. 提取 sqrt(1 - alpha_bar_t)
+        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        pred_noise = (x_t - sqrt_alpha_bar_t * x_start) / sqrt_one_minus_alpha_bar_t
         ####################################################################
         return pred_noise
 
@@ -217,7 +227,14 @@ class GaussianDiffusion(nn.Module):
         # can be done as: x_t = mu + sigma * noise where noise is sampled from N(0, 1).
         # Approximately 3 lines of code.
         ####################################################################
+        # 1. 提取 sqrt(alpha_bar_t)
+        sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
 
+        # 2. 提取 sqrt(1 - alpha_bar_t)
+        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+
+        # 3. 应用重参数化公式计算 x_t
+        x_t = sqrt_alpha_bar_t * x_start + sqrt_one_minus_alpha_bar_t * noise
         ####################################################################
         return x_t
 
