@@ -104,7 +104,6 @@ class ResnetBlock(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
     def forward(self, x, context=None):
-
         scale_shift = None
         if exists(self.mlp) and exists(context):
             context = self.mlp(context)
@@ -239,6 +238,18 @@ class Unet(nn.Module):
         # For unconditional sampling, pass None in`text_emb`.
         ##################################################################
 
+        # 1. 条件预测：使用真实的文本嵌入
+        eps_cond = self.forward(x, time, model_kwargs)
+
+        # 2. 无条件预测：将 text_emb 设为 None
+        model_kwargs_uncond = copy.deepcopy(model_kwargs)
+        model_kwargs_uncond["text_emb"] = None
+        eps_uncond = self.forward(x, time, model_kwargs_uncond)
+
+        # 3. 应用 Classifier-Free Guidance 公式
+        # eps = (w + 1) * eps_cond - w * eps_uncond
+        x = (cfg_scale + 1) * eps_cond - cfg_scale * eps_uncond
+
         ##################################################################
 
         return x
@@ -293,7 +304,44 @@ class Unet(nn.Module):
         #      skip connection from the downsampling path.
         #    - Make sure to pass the context to each ResNet block.
         ##################################################################
+        # 用于存储跳跃连接（Skip Connections）的特征图
+        # 就像是游戏里的“存档点”，后面需要读档来找回细节
+        h = []
 
+        # 1. 下采样过程 (Downsampling / Encoder)
+        # 逐步压缩图像，提取抽象特征
+        for module_list in self.downs:
+            for block in module_list:
+                # 判断当前块是 ResnetBlock 还是 Downsample
+                if isinstance(block, ResnetBlock):
+                    # ResnetBlock 需要时间/文本上下文 (context)
+                    x = block(x, context)
+                    # *关键*：把 ResNet 处理后的特征图存起来
+                    h.append(x)
+                else:
+                    # Downsample 块只需要输入 x
+                    x = block(x)
+
+        # 2. 中间层 (Middle / Bottleneck)
+        # 在压缩得最小的时候，处理最高级的语义信息
+        x = self.mid_block1(x, context)
+        x = self.mid_block2(x, context)
+
+        # 3. 上采样过程 (Upsampling / Decoder)
+        # 逐步放大图像，恢复细节
+        for module_list in self.ups:
+            for block in module_list:
+                if isinstance(block, ResnetBlock):
+                    # *关键*：从存好的列表里取出对应的特征图（后进先出）
+                    skip = h.pop()
+                    # 拼接：将当前的特征 x 和存下来的 skip 拼在一起
+                    # dim=1 表示在通道维度拼接 (Channel Concatenation)
+                    x = torch.cat((x, skip), dim=1)
+                    # 再送入 ResNet 处理
+                    x = block(x, context)
+                else:
+                    # Upsample 块 (放大)
+                    x = block(x)
         ##################################################################
 
         # Final block

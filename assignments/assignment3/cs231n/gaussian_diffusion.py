@@ -23,7 +23,9 @@ class GaussianDiffusion(nn.Module):
         assert objective in {
             "pred_noise",
             "pred_x_start",
-        }, "objective must be either pred_noise (predict noise) or pred_x_start (predict image start)"
+        }, (
+            "objective must be either pred_noise (predict noise) or pred_x_start (predict image start)"
+        )
 
         # A helper function to register some constants as buffers to ensure that
         # they are on the same device as model parameters.
@@ -106,7 +108,9 @@ class GaussianDiffusion(nn.Module):
         sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
 
         # 2. 提取 sqrt(1 - alpha_bar_t)
-        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        sqrt_one_minus_alpha_bar_t = extract(
+            self.sqrt_one_minus_alphas_cumprod, t, x_t.shape
+        )
         x_start = (x_t - sqrt_one_minus_alpha_bar_t * noise) / sqrt_alpha_bar_t
         ####################################################################
         return x_start
@@ -130,7 +134,9 @@ class GaussianDiffusion(nn.Module):
         sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
 
         # 2. 提取 sqrt(1 - alpha_bar_t)
-        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        sqrt_one_minus_alpha_bar_t = extract(
+            self.sqrt_one_minus_alphas_cumprod, t, x_start.shape
+        )
         pred_noise = (x_t - sqrt_alpha_bar_t * x_start) / sqrt_one_minus_alpha_bar_t
         ####################################################################
         return pred_noise
@@ -158,38 +164,37 @@ class GaussianDiffusion(nn.Module):
 
     @torch.no_grad()
     def p_sample(self, x_t, t: int, model_kwargs={}):
-        """Sample from p(x_{t-1} | x_t) according to Eq. (6) of the paper. Used only during inference.
-        Args:
-            x_t: (b, *) tensor. Noisy image.
-            t: int. Sampling time step.
-            model_kwargs: additional arguments for the model.
-        Returns:
-            x_tm1: (b, *) tensor. Sampled image.
-        """
-        t = torch.full((x_t.shape[0],), t, device=x_t.device, dtype=torch.long)  # (b,)
-        x_tm1 = None  # sample x_{t-1} from p(x_{t-1} | x_t)
+        """Sample from p(x_{t-1} | x_t) according to Eq. (6) of the paper."""
+        t_tensor = torch.full((x_t.shape[0],), t, device=x_t.device, dtype=torch.long)
 
-        ##################################################################
-        # TODO: Implement the sampling step p(x_{t-1} | x_t) according to Eq. (6):
-        #
-        # - Steps:
-        #   1. Get the model prediction by calling self.model with appropriate args.
-        #   2. The model output can be either noise or x_start depending on self.objective.
-        #      You can recover the other by calling self.predict_start_from_noise or
-        #      self.predict_noise_from_start as needed.
-        #   3. Clamp predicted x_start to the valid range [-1, 1]. This ensures the
-        #      generation remains stable during denoising iterations.
-        #   4. Get the mean and std for q(x_{t-1} | x_t, x_0) using self.q_posterior,
-        #      and sample x_{t-1}.
-        ##################################################################
-        
-        ##################################################################
+        # 1. 模型预测
+        model_output = self.model(x_t, t_tensor, model_kwargs)
+
+        # 2. 根据 objective 恢复 x_start
+        if self.objective == "pred_noise":
+            x_start = self.predict_start_from_noise(x_t, t_tensor, model_output)
+        elif self.objective == "pred_x_start":
+            x_start = model_output
+        else:
+            raise ValueError(f"Unknown objective {self.objective}")
+
+        # 3. 截断到 [-1, 1]
+        x_start = torch.clamp(x_start, -1.0, 1.0)
+
+        # 4. 计算后验均值和标准差
+        posterior_mean, posterior_std = self.q_posterior(x_start, x_t, t_tensor)
+
+        # 5. 重参数化采样
+        noise = torch.randn_like(x_t)
+        # t=0 时不加噪声
+        nonzero_mask = (t_tensor > 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
+
+        x_tm1 = posterior_mean + nonzero_mask * posterior_std * noise
 
         return x_tm1
 
     @torch.no_grad()
     def sample(self, batch_size=16, return_all_timesteps=False, model_kwargs={}):
-
         shape = (batch_size, self.channels, self.image_size, self.image_size)
         img = torch.randn(shape, device=self.betas.device)
         imgs = [img]
@@ -231,7 +236,9 @@ class GaussianDiffusion(nn.Module):
         sqrt_alpha_bar_t = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
 
         # 2. 提取 sqrt(1 - alpha_bar_t)
-        sqrt_one_minus_alpha_bar_t = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        sqrt_one_minus_alpha_bar_t = extract(
+            self.sqrt_one_minus_alphas_cumprod, t, x_start.shape
+        )
 
         # 3. 应用重参数化公式计算 x_t
         x_t = sqrt_alpha_bar_t * x_start + sqrt_one_minus_alpha_bar_t * noise
@@ -255,7 +262,20 @@ class GaussianDiffusion(nn.Module):
         # Finally, compute the weighted MSE loss.
         # Approximately 3-4 lines of code.
         ####################################################################
+        # 1. 生成带噪图片 x_t (Forward Process)
+        # 利用之前写好的 q_sample，把 x_start 和 noise 混合
+        x_t = self.q_sample(x_start, t, noise=noise)
 
+        # 2. 模型进行预测 (Reverse Process Prediction)
+        # 将带噪图片 x_t 和时间步 t (以及可能的文本条件 model_kwargs) 输入给模型
+        # 模型会输出它认为的噪音 (如果 objective="pred_noise")
+        model_output = self.model(x_t, t, model_kwargs)
+
+        # 3. 计算加权均方误差损失 (Weighted MSE Loss)
+        # 计算预测值与目标值(真实噪音)之间的平方差
+        # loss_weight 通常是 1 (对于 pred_noise)，或者是 SNR 相关的权重
+        loss = (model_output - target) ** 2
+        loss = (loss * loss_weight).mean()
         ####################################################################
 
         return loss
