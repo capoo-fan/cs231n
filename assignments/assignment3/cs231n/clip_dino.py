@@ -26,7 +26,22 @@ def get_similarity_no_loop(text_features, image_features):
     ############################################################################
     # TODO: Compute the cosine similarity. Do NOT use for loops.               #
     ############################################################################
+    # 1. 计算文本特征的 L2 范数 (模长)，保持维度以便广播
+    # text_features.norm(dim=1, keepdim=True) 形状为 (N, 1)
+    text_norms = text_features.norm(dim=1, keepdim=True)
 
+    # 2. 计算图像特征的 L2 范数
+    # image_features.norm(dim=1, keepdim=True) 形状为 (M, 1)
+    image_norms = image_features.norm(dim=1, keepdim=True)
+
+    # 3. 对特征进行归一化 (除以模长)
+    # 加上 1e-8 是为了防止除以 0 (虽然在 embedding 中很少见，但是个好习惯)
+    text_features_norm = text_features / (text_norms + 1e-8)
+    image_features_norm = image_features / (image_norms + 1e-8)
+
+    # 4. 计算矩阵乘法 (Matrix Multiplication)
+    # (N, D) x (M, D)^T = (N, D) x (D, M) -> (N, M)
+    similarity = torch.mm(text_features_norm, image_features_norm.t())
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -62,7 +77,38 @@ def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
     ############################################################################
     # TODO: Find the class labels for images.                                  #
     ############################################################################
+    # 1. 准备图像数据
+    # 输入的 images 是 numpy 数组列表，clip_preprocess 通常需要 PIL Image 格式
+    # 我们遍历每张图，转成 PIL，做预处理，最后用 torch.stack 堆叠成一个 Batch
+    pil_images = [Image.fromarray(img) for img in images]
+    image_input = torch.stack([clip_preprocess(img) for img in pil_images]).to(device)
 
+    # 2. 准备文本数据
+    # 使用 clip.tokenize 将自然语言标签（如 "cat", "dog"）转换成模型能读懂的 token 序列
+    text_tokens = clip.tokenize(class_texts).to(device)
+
+    # 3. 提取特征 (Encoding)
+    # 让模型分别“看图”和“读字”，生成特征向量
+    image_features = clip_model.encode_image(image_input)
+    text_features = clip_model.encode_text(text_tokens)
+
+    # 4. 归一化 (Normalization)
+    # 计算余弦相似度前，必须把向量长度缩放为 1
+    image_features /= image_features.norm(dim=-1, keepdim=True)
+    text_features /= text_features.norm(dim=-1, keepdim=True)
+
+    # 5. 计算相似度 (Cosine Similarity)
+    # 图像向量 @ 文本向量的转置 = 相似度矩阵
+    # 结果形状是 (图片数量, 类别数量)
+    similarity = image_features @ text_features.t()
+
+    # 6. 获取预测结果 (Argmax)
+    # 沿着最后一个维度（类别维度）找最大值的索引
+    # indices 的形状是 (图片数量,)
+    indices = similarity.argmax(dim=-1)
+
+    # 将数字索引映射回文字标签
+    pred_classes = [class_texts[idx] for idx in indices]
     ############################################################################
     #                             END OF YOUR CODE                             #
     ############################################################################
@@ -90,11 +136,36 @@ class CLIPImageRetriever:
         # computation for each text query. You may end up NOT using the above      #
         # similarity function for most compute-optimal implementation.#
         ############################################################################
+        # 1. 保存模型和设备，后续 retrieve 方法需要用到
+        self.clip_model = clip_model
+        self.device = device
 
+        # 2. 图像预处理：将 NumPy 数组转换为 PIL Image，并进行预处理
+        # 结果是一个 Tensor 列表
+        processed_images = [clip_preprocess(Image.fromarray(img)) for img in images]
+
+        # 3. 堆叠成 Batch 并移动到 GPU
+        # image_input shape: (N, 3, H, W)
+        image_input = torch.stack(processed_images).to(device)
+
+        # 4. 提取图像特征 (这是最耗时的步骤，所以只做一次)
+        # image_features shape: (N, D)
+        image_features = clip_model.encode_image(image_input)
+
+        # 5. 归一化图像特征
+        # 提前除以模长，这样后续只需要做点积就能得到余弦相似度
+        # 加上 1e-8 防止除以 0
+        image_features = image_features / (
+            image_features.norm(dim=-1, keepdim=True) + 1e-8
+        )
+
+        # 6. 将处理好的特征保存为类属性
+        # 使用 float() 确保精度（有时 CLIP 默认是 half/FP16）
+        self.image_features = image_features.float()
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        pass
+        
     
     @torch.no_grad()
     def retrieve(self, query: str, k: int = 2):
@@ -113,7 +184,32 @@ class CLIPImageRetriever:
         ############################################################################
         # TODO: Retrieve the indices of top-k images.                              #
         ############################################################################
+        # 1. 文本预处理 (Tokenization)
+        # 将查询字符串转换为 Token ID 序列
+        text_tokens = clip.tokenize([query]).to(self.device)
 
+        # 2. 提取文本特征
+        # text_features shape: (1, D)
+        text_features = self.clip_model.encode_text(text_tokens)
+
+        # 3. 归一化文本特征
+        text_features = text_features / (
+            text_features.norm(dim=-1, keepdim=True) + 1e-8
+        )
+        text_features = text_features.float()
+
+        # 4. 计算相似度 (Cosine Similarity)
+        # 因为两个向量都已经归一化了，所以 点积 == 余弦相似度
+        # (1, D) @ (N, D).T = (1, D) @ (D, N) -> (1, N)
+        similarity = text_features @ self.image_features.t()
+
+        # 5. 获取 Top-K 结果
+        # values 是分数，indices 是原始图片列表中的索引
+        values, indices = similarity[0].topk(k)
+
+        # 6. 转换结果格式
+        # 将 Tensor 转换为 Python 的 int 列表
+        top_indices = indices.cpu().tolist()
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
