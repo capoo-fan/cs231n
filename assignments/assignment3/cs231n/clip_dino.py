@@ -50,8 +50,7 @@ def get_similarity_no_loop(text_features, image_features):
 
 
 @torch.no_grad()
-def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
-                              class_texts, device):
+def clip_zero_shot_classifier(clip_model, clip_preprocess, images, class_texts, device):
     """Performs zero-shot image classification using a CLIP model.
 
     Args:
@@ -71,7 +70,7 @@ def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
         List[str]: Predicted class label for each image, selected from the
             given class_texts.
     """
-    
+
     pred_classes = []
 
     ############################################################################
@@ -114,13 +113,13 @@ def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
     ############################################################################
 
     return pred_classes
-  
+
 
 class CLIPImageRetriever:
     """
     A simple image retrieval system using CLIP.
     """
-    
+
     @torch.no_grad()
     def __init__(self, clip_model, clip_preprocess, images, device):
         """
@@ -165,8 +164,7 @@ class CLIPImageRetriever:
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        
-    
+
     @torch.no_grad()
     def retrieve(self, query: str, k: int = 2):
         """
@@ -215,53 +213,55 @@ class CLIPImageRetriever:
         ############################################################################
         return top_indices
 
-  
+
 class DavisDataset:
     def __init__(self):
-        self.davis = tfds.load('davis/480p', split='validation', as_supervised=False)
-        self.img_tsfm = T.Compose([
-            T.Resize((480, 480)), T.ToTensor(),
-            T.Normalize((0.485,0.456,0.406), (0.229,0.224,0.225)),
-        ])
-        
-      
+        self.davis = tfds.load("davis/480p", split="validation", as_supervised=False)
+        self.img_tsfm = T.Compose(
+            [
+                T.Resize((480, 480)),
+                T.ToTensor(),
+                T.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+            ]
+        )
+
     def get_sample(self, index):
         assert index < len(self.davis)
         ds_iter = iter(tfds.as_numpy(self.davis))
-        for i in range(index+1):
+        for i in range(index + 1):
             video = next(ds_iter)
-        frames, masks = video['video']['frames'], video['video']['segmentations']
+        frames, masks = video["video"]["frames"], video["video"]["segmentations"]
         print(f"video {video['metadata']['video_name'].decode()}  {len(frames)} frames")
         return frames, masks
-    
+
     def process_frames(self, frames, dino_model, device):
         res = []
         for f in frames:
             f = self.img_tsfm(Image.fromarray(f))[None].to(device)
             with torch.no_grad():
-              tok = dino_model.get_intermediate_layers(f, n=1)[0]
+                tok = dino_model.get_intermediate_layers(f, n=1)[0]
             res.append(tok[0, 1:])
 
         res = torch.stack(res)
         return res
-    
+
     def process_masks(self, masks, device):
         res = []
         for m in masks:
-            m = cv2.resize(m, (60,60), cv2.INTER_NEAREST)
+            m = cv2.resize(m, (60, 60), cv2.INTER_NEAREST)
             res.append(torch.from_numpy(m).long().flatten(-2, -1))
         res = torch.stack(res).to(device)
         return res
-    
+
     def mask_frame_overlay(self, processed_mask, frame):
         H, W = frame.shape[:2]
         mask = processed_mask.detach().cpu().numpy()
         mask = mask.reshape((60, 60))
         mask = cv2.resize(
-            mask.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
+            mask.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST
+        )
         overlay = create_segmentation_overlay(mask, frame.copy())
         return overlay
-        
 
 
 def create_segmentation_overlay(segmentation_mask, image, alpha=0.5):
@@ -276,7 +276,9 @@ def create_segmentation_overlay(segmentation_mask, image, alpha=0.5):
     Returns:
         np.ndarray: Image with segmentation overlay (shape: (H, W, 3), dtype: uint8).
     """
-    assert segmentation_mask.shape[:2] == image.shape[:2], "Segmentation and image size mismatch"
+    assert segmentation_mask.shape[:2] == image.shape[:2], (
+        "Segmentation and image size mismatch"
+    )
     assert image.dtype == np.uint8, "Image must be of type uint8"
 
     # Generate deterministic colors for each class using a fixed colormap
@@ -307,7 +309,7 @@ def compute_iou(pred, gt, num_classes):
 
 
 class DINOSegmentation:
-    def __init__(self, device, num_classes: int, inp_dim : int = 384):
+    def __init__(self, device, num_classes: int, inp_dim: int = 384):
         """
         Initialize the DINOSegmentation model.
 
@@ -326,7 +328,19 @@ class DINOSegmentation:
         # function to train classify each DINO feature vector into a seg. class.   #
         # It can be a linear layer or two layer neural network.                    #
         ############################################################################
+        self.device = device
 
+        # 1. 定义模型 (Model)
+        # 使用简单的线性层 (Linear Probe)
+        self.model = nn.Linear(inp_dim, num_classes).to(self.device)
+
+        # 2. 定义优化器 (Optimizer)
+        # 使用 Adam 优化器
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+
+        # 3. 定义损失函数 (Loss Function)
+        # 多分类交叉熵损失
+        self.criterion = nn.CrossEntropyLoss()
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -343,12 +357,35 @@ class DINOSegmentation:
         ############################################################################
         # TODO: Train your model for `num_iters` steps.                            #
         ############################################################################
+        # 确保数据在正确的设备上
+        X_train = X_train.to(self.device)
+        Y_train = Y_train.to(self.device)
 
+        num_samples = X_train.shape[0]
+        batch_size = min(256, num_samples)  # 设置一个合理的 batch size
+
+        self.model.train()
+
+        for i in range(num_iters):
+            # 1. 随机采样 (Random Sampling / Mini-batch)
+            indices = torch.randperm(num_samples)[:batch_size]
+            batch_X = X_train[indices]
+            batch_Y = Y_train[indices]
+
+            # 2. 前向传播 (Forward Pass)
+            outputs = self.model(batch_X)
+
+            # 3. 计算损失 (Compute Loss)
+            loss = self.criterion(outputs, batch_Y)
+
+            # 4. 反向传播与优化 (Backward & Optimization)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        pass
-    
+
     @torch.no_grad()
     def inference(self, X_test):
         """Perform inference on the given test DINO feature vectors.
@@ -363,7 +400,15 @@ class DINOSegmentation:
         ############################################################################
         # TODO: Train your model for `num_iters` steps.                            #
         ############################################################################
+        self.model.eval()
+        X_test = X_test.to(self.device)
 
+        # 1. 前向传播
+        logits = self.model(X_test)
+
+        # 2. 获取预测类别 (Argmax)
+        # logits 形状为 (N, num_classes)，我们在 dim=1 上找最大值
+        pred_classes = torch.argmax(logits, dim=1)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
